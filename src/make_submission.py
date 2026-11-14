@@ -8,6 +8,7 @@ One row per predicted filament:
 Example:
     .venv\\Scripts\\python.exe src\\make_submission.py --pred r34_f0 --params r34_f0 --out r34_f0_v1
     .venv\\Scripts\\python.exe src\\make_submission.py --pred final --params weights\\manifest.json --out final
+    .venv\\Scripts\\python.exe src\\make_submission.py --pred final --params preds\\r34_oof\\post_params_learned.json --out v2
 """
 from __future__ import annotations
 
@@ -26,10 +27,12 @@ from postprocess import PostParams, to_instances, upsample_prob
 
 
 def load_params(spec: str) -> PostParams:
-    """``weights/manifest.json`` (repository) or a run name under preds/ (post_params.json)."""
+    """``weights/manifest.json`` (repository), a parameter file such as
+    ``preds/<run>/post_params_learned.json``, or a run name under preds/ (its post_params.json)."""
     path = Path(spec)
     if path.suffix == ".json":
-        return PostParams(**json.loads(path.read_text())["post_processing"])
+        saved = json.loads(path.read_text())
+        return PostParams(**saved.get("post_processing", saved.get("params")))
     return PostParams(**json.loads((PRED_DIR / spec / "post_params.json").read_text())["params"])
 
 
@@ -68,7 +71,7 @@ def validate(sub: pd.DataFrame) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pred", required=True, help="name under preds/ (uses preds/<name>/test)")
-    ap.add_argument("--params", required=True, help="weights/manifest.json, or a name under preds/")
+    ap.add_argument("--params", required=True, help="weights/manifest.json, a parameter .json, or a name under preds/")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 

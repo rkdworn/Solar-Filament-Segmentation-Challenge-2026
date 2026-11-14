@@ -5,6 +5,7 @@ Inference converts them back to float32 when loading.
 
 Example:
     .venv\\Scripts\\python.exe src\\export_weights.py --runs r34_full --post r34_f0
+    .venv\\Scripts\\python.exe src\\export_weights.py --runs r34_full --post r34_oof --post-file post_params_learned.json
 """
 from __future__ import annotations
 
@@ -22,7 +23,9 @@ WEIGHTS_DIR = ROOT / "weights"
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", nargs="+", required=True, help="run names under models/")
-    ap.add_argument("--post", required=True, help="name under preds/ holding the tuned post_params.json")
+    ap.add_argument("--post", required=True, help="name under preds/ holding the tuned post-processing")
+    ap.add_argument("--post-file", default="post_params.json",
+                    help="parameter file in preds/<post>/, e.g. post_params_learned.json for the learned filter")
     ap.add_argument("--ckpt", default="best.pt")
     ap.add_argument("--submitted", default="final.csv", help="file name of the Kaggle submission under submissions/")
     args = ap.parse_args()
@@ -37,9 +40,13 @@ def main() -> None:
         shutil.copy(src / "config.json", dst / "config.json")
         print(f"{run}: {(dst / 'best.pt').stat().st_size / 1e6:.1f} MB")
 
-    post = json.loads((PRED_DIR / args.post / "post_params.json").read_text())
-    manifest = dict(models=args.runs, post_processing=post["params"], submitted_file=args.submitted,
-                    validation=dict((k, post[k]) for k in ("dice", "pq_pooled", "pq_mean", "sq", "rq")))
+    post = json.loads((PRED_DIR / args.post / args.post_file).read_text())
+    params = post["params"]
+    if params.get("scorer"):  # learned filter: ship the fitted instance scorer with the weights
+        shutil.copy(ROOT / params["scorer"], WEIGHTS_DIR / "instance_scorer.joblib")
+        params["scorer"] = "weights/instance_scorer.joblib"
+    manifest = dict(models=args.runs, post_processing=params, submitted_file=args.submitted,
+                    validation={k: post[k] for k in ("dice", "pq_pooled", "pq_mean", "sq", "rq") if k in post})
     (WEIGHTS_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print("wrote", WEIGHTS_DIR / "manifest.json")
 

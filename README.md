@@ -12,9 +12,14 @@ Every annotation set is a training sample, so observations labeled by several
 experts contribute each expert's view (label-noise regularization). Instances
 are obtained by thresholding the probability map, taking 8-connected
 components, optionally merging nearby fragments, and discarding components
-that are small or not confident. All post-processing parameters are chosen by
-grid search on out-of-fold predictions, scored exactly like the host's
-evaluator (pooled PQ over annotator-image pairs, IoU > 0.5 matching, 2048 px).
+that are unlikely to match an annotated filament. The discarding step is
+either a fixed rule (small or not confident components) or a gradient-boosted
+regressor that predicts each component's matched IoU from its probability,
+shape and stability descriptors; a component is kept when the prediction
+exceeds about PQ / 2, the break-even point of the PQ formula. All
+post-processing parameters (and the regressor) are fitted on out-of-fold
+predictions, scored exactly like the host's evaluator (pooled PQ over
+annotator-image pairs, IoU > 0.5 matching, 2048 px).
 
 ## Repository layout
 
@@ -26,7 +31,9 @@ evaluator (pooled PQ over annotator-image pairs, IoU > 0.5 matching, 2048 px).
 | `src/model.py` | model construction, flip test-time augmentation |
 | `src/train.py` | training with per-epoch validation (Dice, PQ) |
 | `src/infer.py` | probability maps for validation or test images (multi-model averaging) |
-| `src/postprocess.py` | probability map → filament instances |
+| `src/postprocess.py` | probability map → filament instances (fixed or learned filter) |
+| `src/instance_features.py` | descriptors of candidate instances (input of the learned filter) |
+| `src/instance_scorer.py` | trains / tunes the learned filter on out-of-fold maps (cross-fitted by fold) |
 | `src/metrics.py` | Panoptic Quality and Dice, matching the host's definition |
 | `src/tune.py` | grid search of post-processing on out-of-fold predictions |
 | `src/make_submission.py` | writes the submission CSV (compressed COCO RLE) |
@@ -48,6 +55,18 @@ python src/prepare.py                     # 1024 px cache
 python src/prepare.py --size 2048         # native-resolution cache
 # (training / inference commands of the final submission are listed below)
 ```
+
+Post-processing is fitted on out-of-fold maps (`preds/<run>/val/`, all five folds):
+
+```bash
+python src/tune.py --pred r34_oof --fold -1            # fixed rule -> preds/r34_oof/post_params.json
+python src/instance_scorer.py --pred r34_oof           # learned filter -> preds/r34_oof/post_params_learned.json
+python src/make_submission.py --pred final --params preds/r34_oof/post_params_learned.json --out final
+```
+
+`instance_scorer.py` cross-fits the filter by fold and prints PQ / Dice per fold
+next to the fixed rule; `--scorer-from <run>` applies a filter trained on another
+run's maps (e.g. a single model's filter to an ensemble) and only re-tunes its threshold.
 
 ## Results
 
