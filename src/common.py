@@ -48,6 +48,11 @@ def spine_cache_dir(size: int) -> Path:
     return CACHE_DIR / f"spine{size}"
 
 
+def soft_cache_dir(size: int) -> Path:
+    """Soft targets (annotator-mean masks), one file per observation (stem)."""
+    return CACHE_DIR / f"soft{size}"
+
+
 # --------------------------------------------------------------------------- #
 # Annotations
 # --------------------------------------------------------------------------- #

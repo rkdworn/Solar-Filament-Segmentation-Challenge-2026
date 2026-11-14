@@ -21,10 +21,10 @@ evaluator (pooled PQ over annotator-image pairs, IoU > 0.5 matching, 2048 px).
 | File | Purpose |
 |---|---|
 | `src/common.py` | paths, COCO annotation loading, polygon rasterization (pycocotools), grouped CV folds |
-| `src/prepare.py` | builds the resized image / mask cache |
+| `src/prepare.py` | builds the resized image / mask cache, incl. annotator-mean (soft) targets |
 | `src/dataset.py` | PyTorch dataset and augmentations |
 | `src/model.py` | model construction, flip test-time augmentation |
-| `src/train.py` | training with per-epoch validation (Dice, PQ) |
+| `src/train.py` | training with per-epoch validation (Dice, PQ); options for soft targets and weight EMA |
 | `src/infer.py` | probability maps for validation or test images (multi-model averaging) |
 | `src/postprocess.py` | probability map → filament instances |
 | `src/metrics.py` | Panoptic Quality and Dice, matching the host's definition |
@@ -48,6 +48,18 @@ python src/prepare.py                     # 1024 px cache
 python src/prepare.py --size 2048         # native-resolution cache
 # (training / inference commands of the final submission are listed below)
 ```
+
+Training options (`python src/train.py --help`):
+
+* `--soft`: one sample per observation, trained on the per-pixel mean of its
+  annotators' masks (0, 1/3, 1/2, 2/3, 1) instead of one sample per
+  annotator. Needs `python src/prepare.py --soft-only` (included in a full
+  `prepare.py` run). The Dice loss is the Dice semimetric loss, minimized at
+  prediction = soft target. Use ~65 instead of 40 epochs (fewer samples per epoch).
+* `--ema [--ema-decay 0.998]`: validate and save an exponential moving average of the weights.
+* `--select pq|combo`: keep the checkpoint with the best pooled PQ, or the best (Dice + PQ) / 2 (default).
+
+Validation is always per annotation set, so all variants are scored the same way.
 
 ## Results
 
