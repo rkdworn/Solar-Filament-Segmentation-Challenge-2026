@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from common import WORK_SIZE, img_cache_dir, mask_cache_dir, normalize_disk
+from common import WORK_SIZE, img_cache_dir, mask_cache_dir, normalize_disk, spine_cache_dir
 
 
 def photometric_aug() -> A.Compose:
@@ -41,10 +41,12 @@ class FilamentDataset(Dataset):
     with that annotator's labels; this acts as label-noise regularization.
     """
 
-    def __init__(self, image_ids, stems, train: bool, crop: int | None = None, size: int = WORK_SIZE):
+    def __init__(self, image_ids, stems, train: bool, crop: int | None = None, size: int = WORK_SIZE,
+                 spine: bool = False):
         self.image_ids = list(image_ids)
         self.stems = list(stems)
         self.img_dir, self.mask_dir = img_cache_dir(size), mask_cache_dir(size)
+        self.spine_dir = spine_cache_dir(size) if spine else None
         self.photo = photometric_aug() if train else None
         self.geo = geometric_aug(crop) if train else None
 
@@ -53,15 +55,19 @@ class FilamentDataset(Dataset):
 
     def __getitem__(self, i: int):
         img = cv2.imread(str(self.img_dir / f"{self.stems[i]}.png"), cv2.IMREAD_GRAYSCALE)
-        mask = cv2.imread(str(self.mask_dir / f"{self.image_ids[i]}.png"), cv2.IMREAD_GRAYSCALE) > 127
-        mask = mask.astype(np.uint8)
+        targets = [self.mask_dir]
+        if self.spine_dir is not None:  # optional 2nd target channel: the filament center line
+            targets.append(self.spine_dir)
+        masks = [(cv2.imread(str(d / f"{self.image_ids[i]}.png"), cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
+                 for d in targets]
         if self.photo is not None:
             img = self.photo(image=img)["image"]
         x = normalize_disk(img)  # statistics from the whole disk, before cropping
         if self.geo is not None:
-            out = self.geo(image=x, mask=mask)
-            x, mask = out["image"], out["mask"]
-        return torch.from_numpy(np.ascontiguousarray(x)[None]), torch.from_numpy(mask[None].astype(np.float32))
+            out = self.geo(image=x, masks=masks)
+            x, masks = out["image"], out["masks"]
+        y = np.stack(masks).astype(np.float32)
+        return torch.from_numpy(np.ascontiguousarray(x)[None]), torch.from_numpy(y)
 
 
 def load_image_tensor(stem: str, size: int = WORK_SIZE) -> torch.Tensor:

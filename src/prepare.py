@@ -17,7 +17,8 @@ import cv2
 from tqdm import tqdm
 
 from common import (CACHE_DIR, FULL_SIZE, TEST_IMG_DIR, TRAIN_IMG_DIR, WORK_SIZE, img_cache_dir,
-                    load_annotations, mask_cache_dir, read_gray, union_mask)
+                    load_annotations, load_spines, mask_cache_dir, read_gray, spine_cache_dir, spine_mask,
+                    union_mask)
 
 
 def _resize_image(src, dst_dir, size):
@@ -54,6 +55,14 @@ def main() -> None:
         dst = mask_dir / f"{image_id}.png"
         if not dst.exists():
             cv2.imwrite(str(dst), union_mask(polygons[image_id], size) * 255)
+
+    spines = load_spines()
+    spine_dir = spine_cache_dir(size)
+    spine_dir.mkdir(parents=True, exist_ok=True)
+    for image_id in tqdm(index["image_id"], desc="spines"):
+        dst = spine_dir / f"{image_id}.png"
+        if not dst.exists():
+            cv2.imwrite(str(dst), spine_mask(spines[image_id], size) * 255)
 
     index.to_csv(CACHE_DIR / "train_index.csv", index=False)
     print(index.groupby("fold").agg(sets=("image_id", "size"), stems=("stem", "nunique")))

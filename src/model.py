@@ -8,7 +8,8 @@ import segmentation_models_pytorch as smp
 import torch
 
 
-def build_model(arch: str = "Unet", encoder: str = "resnet34", pretrained: bool = True) -> torch.nn.Module:
+def build_model(arch: str = "Unet", encoder: str = "resnet34", pretrained: bool = True,
+                classes: int = 1) -> torch.nn.Module:
     """U-Net family model with an ImageNet-pretrained encoder.
 
     ``in_channels=1``: the H-alpha images are grayscale; smp adapts the first
@@ -19,14 +20,14 @@ def build_model(arch: str = "Unet", encoder: str = "resnet34", pretrained: bool 
         encoder_name=encoder,
         encoder_weights="imagenet" if pretrained else None,
         in_channels=1,
-        classes=1,
+        classes=classes,  # channel 0 = filament; optional channel 1 = spine (training aid)
     )
 
 
 def load_trained(run_dir: Path, ckpt: str = "best.pt", device: str = "cuda") -> tuple[torch.nn.Module, int]:
     """Return the trained model and the resolution it was trained at."""
     cfg = json.loads((run_dir / "config.json").read_text())
-    model = build_model(cfg["arch"], cfg["encoder"], pretrained=False)
+    model = build_model(cfg["arch"], cfg["encoder"], pretrained=False, classes=2 if cfg.get("spine") else 1)
     model.load_state_dict(torch.load(run_dir / ckpt, map_location="cpu", weights_only=True))
     return model.to(device).eval().to(memory_format=torch.channels_last), int(cfg.get("size", 1024))
 
@@ -43,6 +44,7 @@ def predict_prob(model: torch.nn.Module, x: torch.Tensor, tta: bool = True) -> t
     with torch.autocast("cuda", dtype=torch.bfloat16):
         for dims in flips:
             xi = torch.flip(x, dims) if dims else x
-            p = torch.sigmoid(model(xi.contiguous(memory_format=torch.channels_last)).float())
+            # only the filament channel is used; a spine channel (if any) is ignored
+            p = torch.sigmoid(model(xi.contiguous(memory_format=torch.channels_last))[:, :1].float())
             out = out + (torch.flip(p, dims) if dims else p)
     return out / len(flips)

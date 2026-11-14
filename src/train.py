@@ -49,11 +49,13 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--seed", type=int, default=SEED)
+    ap.add_argument("--spine", action="store_true", help="auxiliary center-line (spine) output")
+    ap.add_argument("--spine-weight", type=float, default=0.5)
     return ap.parse_args()
 
 
 class Validator:
-    """Holds the held-out observations and their ground truth at 1024."""
+    """Held-out observations and their ground truth at the network resolution."""
 
     def __init__(self, index: pd.DataFrame, polygons: dict, fold: int, size: int):
         self.size = size
@@ -93,12 +95,13 @@ def main() -> None:
 
     index, polygons = load_annotations()
     train_df = index if args.fold < 0 else index[index["fold"] != args.fold]
-    ds = FilamentDataset(train_df["image_id"], train_df["stem"], train=True, crop=args.crop, size=args.size)
+    ds = FilamentDataset(train_df["image_id"], train_df["stem"], train=True, crop=args.crop, size=args.size,
+                         spine=args.spine)
     dl = DataLoader(ds, batch_size=args.bs, shuffle=True, num_workers=args.workers, pin_memory=True,
                     drop_last=True, persistent_workers=args.workers > 0)
     validator = Validator(index, polygons, args.fold, args.size) if args.fold >= 0 else None
 
-    model = build_model(args.arch, args.encoder).cuda().to(memory_format=torch.channels_last)
+    model = build_model(args.arch, args.encoder, classes=2 if args.spine else 1).cuda().to(memory_format=torch.channels_last)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     total = args.epochs * len(dl)
     warmup = len(dl)  # one epoch of linear warm-up, then cosine decay
@@ -117,7 +120,9 @@ def main() -> None:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 logits = model(x)
             logits = logits.float()
-            loss = bce(logits, y) + dice_loss(logits, y)
+            loss = bce(logits[:, :1], y[:, :1]) + dice_loss(logits[:, :1], y[:, :1])
+            if args.spine:  # auxiliary task: predict the filament center line
+                loss = loss + args.spine_weight * (bce(logits[:, 1:2], y[:, 1:2]) + dice_loss(logits[:, 1:2], y[:, 1:2]))
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()

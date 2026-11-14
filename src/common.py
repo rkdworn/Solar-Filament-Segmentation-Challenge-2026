@@ -41,6 +41,10 @@ def mask_cache_dir(size: int) -> Path:
     return CACHE_DIR / f"mask{size}"
 
 
+def spine_cache_dir(size: int) -> Path:
+    return CACHE_DIR / f"spine{size}"
+
+
 # --------------------------------------------------------------------------- #
 # Annotations
 # --------------------------------------------------------------------------- #
@@ -76,6 +80,32 @@ def load_annotations(path: Path = ANN_PATH) -> tuple[pd.DataFrame, dict[str, lis
     index = pd.DataFrame(rows).sort_values("image_id").reset_index(drop=True)
     index["fold"] = index["stem"].map(make_folds(index["stem"].unique()))
     return index, polygons
+
+
+def load_spines(path: Path = ANN_PATH) -> dict[str, list[list[float]]]:
+    """image_id -> list of filament spines (center lines) ``[x0, y0, x1, y1, ...]``.
+
+    Spines are only used as an auxiliary training target (allowed by the host);
+    the model never receives them at inference time.
+    """
+    with open(path, encoding="utf-8") as f:
+        coco = json.load(f)
+    spines: dict[str, list[list[float]]] = {img["id"]: [] for img in coco["images"]}
+    for ann in coco["annotations"]:
+        if ann.get("spine"):
+            spines[ann["image_id"]].append(ann["spine"])
+    return spines
+
+
+def spine_mask(spines: list[list[float]], size: int) -> np.ndarray:
+    """Rasterize spines as poly-lines 3 px wide at 2048 (2 px at 1024)."""
+    out = np.zeros((size, size), np.uint8)
+    thickness = max(2, round(3 * size / FULL_SIZE))
+    for sp in spines:
+        pts = np.round(np.asarray(sp, np.float64).reshape(-1, 2) * size / FULL_SIZE).astype(np.int32)
+        if len(pts) >= 2:
+            cv2.polylines(out, [pts], isClosed=False, color=1, thickness=thickness)
+    return out
 
 
 def make_folds(stems, n_folds: int = N_FOLDS, seed: int = SEED) -> dict[str, int]:
