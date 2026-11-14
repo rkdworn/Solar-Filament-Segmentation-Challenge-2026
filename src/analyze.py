@@ -28,8 +28,9 @@ from postprocess import PostParams, to_instances, upsample_prob
 SIZE_BINS = [(0, 500, "small <500px"), (500, 2000, "medium 500-2000px"), (2000, 10**9, "large >2000px")]
 
 
-def analyze_run(name: str, sets: dict, gt: dict) -> tuple[dict, dict]:
-    params = PostParams(**json.loads((PRED_DIR / name / "post_params.json").read_text())["params"])
+def analyze_run(name: str, sets: dict, gt: dict, params_from: str | None = None) -> tuple[dict, dict]:
+    """params_from: use another run's tuned post-processing (checks that it transfers)."""
+    params = PostParams(**json.loads((PRED_DIR / (params_from or name) / "post_params.json").read_text())["params"])
     stats, dices = [], []
     per_site = defaultdict(list)
     size_hit = defaultdict(lambda: [0, 0])
@@ -87,6 +88,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--preds", nargs="+", required=True)
     ap.add_argument("--fold", type=int, default=0)
+    ap.add_argument("--params-from", default=None, help="apply this run's post_params.json to all runs")
     args = ap.parse_args()
 
     index, polygons = load_annotations()
@@ -96,7 +98,7 @@ def main() -> None:
 
     rows, sites = {}, {}
     for name in args.preds:
-        rows[name], sites[name] = analyze_run(name, sets, gt)
+        rows[name], sites[name] = analyze_run(name, sets, gt, args.params_from)
     pd.set_option("display.width", 200)
     pd.set_option("display.float_format", "{:.4f}".format)
     print(pd.DataFrame(rows).T[["pq_pooled", "sq", "rq", "dice", "tp", "fp", "fn", "frag_rate", "merge_rate"]

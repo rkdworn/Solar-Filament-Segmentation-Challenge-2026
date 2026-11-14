@@ -30,7 +30,7 @@ THRESHOLDS = [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6]
 MERGE_PX = [0, 8, 16, 32, 48]          # at 2048 resolution
 MIN_AREA = [0, 100, 200, 400, 800]
 MIN_CONF = [0.0, 0.8, 0.9, 0.95, 0.99]   # peak probability
-MIN_MEANP = [0.0, 0.6, 0.7, 0.8, 0.85, 0.9]  # mean probability
+MIN_MEANP = [0.0, 0.7, 0.8, 0.85, 0.9, 0.93]  # mean probability
 
 
 def instance_props(labels: np.ndarray, prob: np.ndarray):
