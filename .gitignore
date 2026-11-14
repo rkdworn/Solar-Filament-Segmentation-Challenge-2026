@@ -23,3 +23,6 @@ report/*.ko.*
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Overleaf template (report source is added once the report is final)
+report/kaggle_comp_report_fi_segm_2026/
