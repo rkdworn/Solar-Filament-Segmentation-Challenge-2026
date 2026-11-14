@@ -26,3 +26,6 @@ desktop.ini
 
 # Overleaf template (report source is added once the report is final)
 report/kaggle_comp_report_fi_segm_2026/
+
+# Generated Kaggle upload folders (contain the account name)
+kaggle/build/

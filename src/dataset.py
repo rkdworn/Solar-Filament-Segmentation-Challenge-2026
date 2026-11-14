@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from common import WORK_SIZE, img_cache_dir, mask_cache_dir, normalize_disk, spine_cache_dir
+from common import WORK_SIZE, img_cache_dir, mask_cache_dir, normalize_disk, soft_cache_dir, spine_cache_dir
 
 
 def photometric_aug() -> A.Compose:
@@ -20,12 +20,17 @@ def photometric_aug() -> A.Compose:
     ])
 
 
-def geometric_aug(crop: int | None) -> A.Compose:
+def geometric_aug(crop: int | None, mask_interpolation: int = cv2.INTER_NEAREST) -> A.Compose:
     """Applied after normalization. The solar disk has no preferred
-    orientation, so arbitrary rotations and flips are label-preserving."""
+    orientation, so arbitrary rotations and flips are label-preserving.
+
+    The image is resampled bilinearly; targets use ``mask_interpolation``
+    (nearest neighbour keeps binary masks binary).
+    """
     ops = [
         A.Affine(rotate=(-180, 180), scale=(0.9, 1.1), translate_percent=(-0.03, 0.03),
-                 border_mode=cv2.BORDER_CONSTANT, fill=-6.0, fill_mask=0, p=0.9),
+                 border_mode=cv2.BORDER_CONSTANT, fill=-6.0, fill_mask=0, mask_interpolation=mask_interpolation,
+                 p=0.9),
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
     ]
@@ -35,31 +40,57 @@ def geometric_aug(crop: int | None) -> A.Compose:
 
 
 class FilamentDataset(Dataset):
-    """One sample = one annotation set (an observation + one annotator's masks).
+    """Training samples (image + target) read from the cache.
 
-    Observations annotated by several people appear several times, each time
-    with that annotator's labels; this acts as label-noise regularization.
+    Two kinds of targets:
+
+    * hard (default): one sample = one annotation set (an observation + one
+      annotator's union mask). Observations annotated by several people appear
+      several times, each time with that annotator's labels; this acts as
+      label-noise regularization. ``image_ids`` name the annotation sets.
+    * soft (``soft=True``): one sample = one observation; the target is the
+      per-pixel mean of all its annotators' masks (0, 1/3, 1/2, 2/3 or 1, see
+      ``prepare.cache_soft_targets``). ``stems`` must be unique and
+      ``image_ids`` is ignored (may be None).
     """
 
     def __init__(self, image_ids, stems, train: bool, crop: int | None = None, size: int = WORK_SIZE,
-                 spine: bool = False):
-        self.image_ids = list(image_ids)
+                 spine: bool = False, soft: bool = False):
+        if soft and spine:
+            raise ValueError("the spine target is per annotation set and cannot be combined with soft targets")
         self.stems = list(stems)
-        self.img_dir, self.mask_dir = img_cache_dir(size), mask_cache_dir(size)
-        self.spine_dir = spine_cache_dir(size) if spine else None
+        self.soft = soft
+        # File name of each sample's target in the cache: observation (soft) or annotation set (hard).
+        self.target_names = self.stems if soft else list(image_ids)
+        self.img_dir = img_cache_dir(size)
+        self.target_dirs = [soft_cache_dir(size) if soft else mask_cache_dir(size)]
+        if spine:  # optional 2nd target channel: the filament center line
+            self.target_dirs.append(spine_cache_dir(size))
+        if soft and not self.target_dirs[0].is_dir():
+            raise FileNotFoundError(f"{self.target_dirs[0]} missing: run prepare.py --soft-only --size {size}")
         self.photo = photometric_aug() if train else None
-        self.geo = geometric_aug(crop) if train else None
+        # Hard masks: nearest neighbour, they stay exactly 0/1. Soft targets go
+        # through the warp as uint8 0-255 with *bilinear* interpolation, like
+        # the image: an interpolated value is a convex combination of
+        # neighbouring targets, and OpenCV saturates uint8 results, so after
+        # dividing by 255 every target value lies in [0, 1]. The constant
+        # border (outside the rotated image) is filled with 0 = background.
+        self.geo = geometric_aug(crop, cv2.INTER_LINEAR if soft else cv2.INTER_NEAREST) if train else None
 
     def __len__(self) -> int:
-        return len(self.image_ids)
+        return len(self.stems)
+
+    def _read_targets(self, i: int) -> list[np.ndarray]:
+        """Target channels as uint8: 0/1 for hard masks, 0-255 for soft targets."""
+        name = self.target_names[i]
+        targets = [cv2.imread(str(d / f"{name}.png"), cv2.IMREAD_GRAYSCALE) for d in self.target_dirs]
+        if self.soft:
+            return targets  # scaled to [0, 1] after the geometric augmentation
+        return [(t > 127).astype(np.uint8) for t in targets]
 
     def __getitem__(self, i: int):
         img = cv2.imread(str(self.img_dir / f"{self.stems[i]}.png"), cv2.IMREAD_GRAYSCALE)
-        targets = [self.mask_dir]
-        if self.spine_dir is not None:  # optional 2nd target channel: the filament center line
-            targets.append(self.spine_dir)
-        masks = [(cv2.imread(str(d / f"{self.image_ids[i]}.png"), cv2.IMREAD_GRAYSCALE) > 127).astype(np.uint8)
-                 for d in targets]
+        masks = self._read_targets(i)
         if self.photo is not None:
             img = self.photo(image=img)["image"]
         x = normalize_disk(img)  # statistics from the whole disk, before cropping
@@ -67,6 +98,8 @@ class FilamentDataset(Dataset):
             out = self.geo(image=x, masks=masks)
             x, masks = out["image"], out["masks"]
         y = np.stack(masks).astype(np.float32)
+        if self.soft:
+            y /= 255.0
         return torch.from_numpy(np.ascontiguousarray(x)[None]), torch.from_numpy(y)
 
 
