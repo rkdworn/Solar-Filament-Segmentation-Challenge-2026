@@ -5,7 +5,7 @@ The result covers every training observation exactly once, so post-processing
 can be tuned on all 707 images (``tune.py --pred <prefix>_oof --fold -1``).
 
 Example:
-    .venv\Scripts\python.exe src\collect_oof.py --prefix r34
+    .venv\\Scripts\\python.exe src\\collect_oof.py --prefix r34
 """
 from __future__ import annotations
 
