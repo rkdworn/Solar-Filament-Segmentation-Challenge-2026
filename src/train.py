@@ -53,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--name", required=True)
     ap.add_argument("--arch", default="Unet")
     ap.add_argument("--encoder", default="resnet34")
+    ap.add_argument("--attention", default=None, choices=["scse"], help="decoder attention blocks (default: none)")
     ap.add_argument("--fold", type=int, default=0, help="-1 = train on all data, no validation")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--bs", type=int, default=8)
@@ -194,7 +195,8 @@ def main() -> None:
                     drop_last=True, persistent_workers=args.workers > 0)
     validator = Validator(index, polygons, args.fold, args.size) if args.fold >= 0 else None
 
-    model = build_model(args.arch, args.encoder, classes=2 if args.spine else 1).cuda().to(memory_format=torch.channels_last)
+    model = build_model(args.arch, args.encoder, classes=2 if args.spine else 1,
+                        attention=args.attention).cuda().to(memory_format=torch.channels_last)
     ema = ModelEMA(model, args.ema_decay) if args.ema else None
     eval_model = ema.module if ema is not None else model  # the weights that are validated and saved
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)

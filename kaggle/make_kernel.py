@@ -66,7 +66,10 @@ def worker(gpu, folds):
         os.makedirs(PROJ / "models" / name, exist_ok=True)
         run(f"{sys.executable} src/train.py --name {name} --fold {k} {CONFIG['train_args']} "
             f"> models/{name}/train.out 2>&1", gpu)
-        run(f"{sys.executable} src/infer.py --runs {name} --split val --fold {k} --out {name}", gpu)
+        tta = CONFIG.get("tta", "flip4")
+        run(f"{sys.executable} src/infer.py --runs {name} --split val --fold {k} --out {name} --tta {tta}", gpu)
+        if CONFIG.get("test"):  # this fold model's test maps; the folds are averaged later (blend.py)
+            run(f"{sys.executable} src/infer.py --runs {name} --split test --out {name}_test --tta {tta}", gpu)
         (PROJ / "models" / name / "last.pt").unlink(missing_ok=True)  # keep only the selected checkpoint
 
 n_gpu = max(1, int(subprocess.run("nvidia-smi -L | wc -l", shell=True, capture_output=True, text=True).stdout))
@@ -99,13 +102,15 @@ def main() -> None:
     ap.add_argument("--train-args", required=True)
     ap.add_argument("--sizes", type=int, nargs="+", default=[1024], help="caches to build")
     ap.add_argument("--extra-prep", nargs="*", default=[], help="extra commands run in the project folder")
+    ap.add_argument("--tta", default="flip4", choices=["none", "flip4", "d4"], help="TTA of the predicted maps")
+    ap.add_argument("--test", action="store_true", help="also predict the test images with every fold model")
     args = ap.parse_args()
 
     code = build_code_dataset(args.user)
     kdir = BUILD / args.slug
     kdir.mkdir(parents=True, exist_ok=True)
     config = dict(prefix=args.prefix, folds=args.folds, train_args=args.train_args, sizes=args.sizes,
-                  extra_prep=args.extra_prep, pip=PIP)
+                  extra_prep=args.extra_prep, pip=PIP, tta=args.tta, test=args.test)
     (kdir / "run.py").write_text(RUNNER.replace("__CONFIG__", repr(config)), encoding="utf-8")
     meta = dict(id=f"{args.user}/{args.slug}", title=args.slug, code_file="run.py", language="python",
                 kernel_type="script", is_private=True, enable_gpu=True, enable_tpu=False, enable_internet=True,
