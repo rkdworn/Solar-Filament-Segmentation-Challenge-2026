@@ -97,7 +97,7 @@ def main() -> None:
     args = ap.parse_args()
 
     index, polygons = load_annotations()
-    val = index[index["fold"] == args.fold]
+    val = index if args.fold < 0 else index[index["fold"] == args.fold]  # -1 = all folds (OOF)
     sets = {s: list(g["image_id"]) for s, g in val.groupby("stem")}
     print(f"loading ground truth for {len(val)} annotation sets at {FULL_SIZE}px ...")
     gt = {i: [to_flat(m) for m in instance_masks(polygons[i], FULL_SIZE)] for i in val["image_id"]}
@@ -106,14 +106,16 @@ def main() -> None:
     probs = {}
     for s in sets:
         p8 = cv2.imread(str(pred_dir / f"{s}.png"), cv2.IMREAD_GRAYSCALE)
-        probs[s] = upsample_prob(p8.astype(np.float32) / 255.0, FULL_SIZE)
+        # keep 8-bit maps in memory (4 MB each at 2048 px instead of 16 MB as float)
+        probs[s] = np.round(upsample_prob(p8.astype(np.float32) / 255.0, FULL_SIZE) * 255).astype(np.uint8)
 
     rows = []
     for thr, merge in tqdm(list(itertools.product(THRESHOLDS, MERGE_PX)), desc="threshold x merge"):
         tables = []
         for s, ids in sets.items():
-            labels = to_instances(probs[s], PostParams(threshold=thr, merge_px=merge))
-            area, maxp, meanp = instance_props(labels, probs[s])
+            prob = probs[s].astype(np.float32) / 255.0
+            labels = to_instances(prob, PostParams(threshold=thr, merge_px=merge))
+            area, maxp, meanp = instance_props(labels, prob)
             per_set = [(gt_matches(labels, area, gt[i]), union_overlap(labels, area, gt[i])) for i in ids]
             tables.append((area, maxp, meanp, per_set))
         for a, c, m in itertools.product(MIN_AREA, MIN_CONF, MIN_MEANP):

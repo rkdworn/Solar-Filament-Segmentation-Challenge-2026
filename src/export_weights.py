@@ -24,6 +24,7 @@ def main() -> None:
     ap.add_argument("--runs", nargs="+", required=True, help="run names under models/")
     ap.add_argument("--post", required=True, help="name under preds/ holding the tuned post_params.json")
     ap.add_argument("--ckpt", default="best.pt")
+    ap.add_argument("--submitted", default="final.csv", help="file name of the Kaggle submission under submissions/")
     args = ap.parse_args()
 
     WEIGHTS_DIR.mkdir(exist_ok=True)
@@ -37,7 +38,7 @@ def main() -> None:
         print(f"{run}: {(dst / 'best.pt').stat().st_size / 1e6:.1f} MB")
 
     post = json.loads((PRED_DIR / args.post / "post_params.json").read_text())
-    manifest = dict(models=args.runs, post_processing=post["params"],
+    manifest = dict(models=args.runs, post_processing=post["params"], submitted_file=args.submitted,
                     validation=dict((k, post[k]) for k in ("dice", "pq_pooled", "pq_mean", "sq", "rq")))
     (WEIGHTS_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print("wrote", WEIGHTS_DIR / "manifest.json")

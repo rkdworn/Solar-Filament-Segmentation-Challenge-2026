@@ -79,7 +79,7 @@ def main() -> None:
     ap.add_argument("--fold", type=int, default=0)
     args = ap.parse_args()
     index, polygons = load_annotations()
-    val = index[index["fold"] == args.fold]
+    val = index if args.fold < 0 else index[index["fold"] == args.fold]  # -1 = all folds (OOF)
     sets = {s: list(g["image_id"]) for s, g in val.groupby("stem")}
     gt = {i: [to_flat(m) for m in instance_masks(polygons[i], FULL_SIZE)] for i in val["image_id"]}
     print(pd.DataFrame({name: analyze(name, sets, gt) for name in args.preds}).to_string())
