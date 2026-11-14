@@ -12,6 +12,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import cv2
@@ -47,6 +48,8 @@ def main() -> None:
     out_dir = PRED_DIR / args.out / args.split
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    torch.cuda.synchronize()
+    t0 = time.time()
     for stem in tqdm(stems, desc=f"{args.split} x{len(models)} models"):
         probs = []
         for model, size in models:
@@ -56,6 +59,8 @@ def main() -> None:
             probs.append(p)
         prob = torch.stack(probs).mean(0)[0, 0].cpu().numpy()
         cv2.imwrite(str(out_dir / f"{stem}.png"), np.round(prob * 255).astype(np.uint8))
+    sec = time.time() - t0
+    print(f"{len(stems)} images in {sec:.0f} s ({sec / len(stems):.2f} s/image incl. I/O, TTA={not args.no_tta})")
 
 
 if __name__ == "__main__":
