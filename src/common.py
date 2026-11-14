@@ -25,7 +25,8 @@ DATA_DIR = DATA_ROOT / "MAGFiLO_1.0_Kaggle_2026"
 TRAIN_IMG_DIR = DATA_DIR / "train" / "train_images"
 TEST_IMG_DIR = DATA_DIR / "test" / "test_images"
 ANN_PATH = DATA_DIR / "train" / "MAGFiLO_1.0_Annotations_kaggle2026_train.json"
-CACHE_DIR = DATA_ROOT / "cache"
+# Resized images / masks; set FIL_CACHE_DIR when the data folder is read-only (e.g. on Kaggle).
+CACHE_DIR = Path(os.environ.get("FIL_CACHE_DIR", DATA_ROOT / "cache"))
 MODEL_DIR = ROOT / "models"
 PRED_DIR = ROOT / "preds"
 SUB_DIR = ROOT / "submissions"

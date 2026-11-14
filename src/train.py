@@ -27,7 +27,7 @@ from torch.utils.data import DataLoader
 from common import MODEL_DIR, SEED, WORK_SIZE, instance_masks, load_annotations, mask_cache_dir
 from dataset import FilamentDataset, load_image_tensor
 from metrics import dice, pq_stats, summarize, to_flat
-from model import build_model, predict_prob
+from model import amp_dtype, build_model, predict_prob
 from postprocess import PostParams, to_instances
 
 def default_post(size: int) -> PostParams:
@@ -107,6 +107,8 @@ def main() -> None:
     warmup = len(dl)  # one epoch of linear warm-up, then cosine decay
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: (s + 1) / warmup if s < warmup else 0.5 * (1 + math.cos(math.pi * (s - warmup) / (total - warmup))))
+    dtype = amp_dtype()
+    scaler = torch.amp.GradScaler("cuda", enabled=dtype == torch.float16)  # loss scaling only for fp16
     bce = torch.nn.BCEWithLogitsLoss()
     dice_loss = smp.losses.DiceLoss(mode="binary", from_logits=True)
 
@@ -117,15 +119,16 @@ def main() -> None:
         for x, y in dl:
             x = x.cuda(non_blocking=True).contiguous(memory_format=torch.channels_last)
             y = y.cuda(non_blocking=True)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
+            with torch.autocast("cuda", dtype=dtype):
                 logits = model(x)
             logits = logits.float()
             loss = bce(logits[:, :1], y[:, :1]) + dice_loss(logits[:, :1], y[:, :1])
             if args.spine:  # auxiliary task: predict the filament center line
                 loss = loss + args.spine_weight * (bce(logits[:, 1:2], y[:, 1:2]) + dice_loss(logits[:, 1:2], y[:, 1:2]))
             opt.zero_grad(set_to_none=True)
-            loss.backward()
-            opt.step()
+            scaler.scale(loss).backward()
+            scaler.step(opt)
+            scaler.update()
             sched.step()
             losses.append(loss.item())
 
