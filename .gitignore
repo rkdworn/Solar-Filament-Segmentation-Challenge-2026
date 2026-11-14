@@ -1,0 +1,25 @@
+# Competition data (non-commercial use only; not redistributable)
+data/
+
+# Large artifacts
+models/
+preds/
+submissions/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Personal working notes (Korean, not part of the solution)
+CLAUDE.md
+대회정보.md
+실험기록.md
+report/*초안*
+report/*.ko.*
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
