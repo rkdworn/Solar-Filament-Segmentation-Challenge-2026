@@ -8,6 +8,11 @@ import segmentation_models_pytorch as smp
 import torch
 
 
+def amp_dtype() -> torch.dtype:
+    """bfloat16 on Ampere or newer GPUs; float16 (with loss scaling in training) on older ones such as the T4."""
+    return torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+
 def build_model(arch: str = "Unet", encoder: str = "resnet34", pretrained: bool = True,
                 classes: int = 1) -> torch.nn.Module:
     """U-Net family model with an ImageNet-pretrained encoder.
@@ -56,7 +61,7 @@ def predict_prob(model: torch.nn.Module, x: torch.Tensor, tta: bool | str = True
     """
     views = tta_views(tta)
     out = 0
-    with torch.autocast("cuda", dtype=torch.bfloat16):
+    with torch.autocast("cuda", dtype=amp_dtype()):
         for transpose, dims in views:
             xi = x.transpose(2, 3) if transpose else x
             xi = torch.flip(xi, dims) if dims else xi
