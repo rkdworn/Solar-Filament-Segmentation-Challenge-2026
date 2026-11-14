@@ -104,14 +104,14 @@ def set_targets(labels: np.ndarray, gts: list[np.ndarray], union: np.ndarray, id
 
 
 def build_table(pred: str, index: pd.DataFrame, polygons: dict, threshold: float, merge_px: int,
-                baseline: PostParams) -> dict:
+                baseline: PostParams, group_low: float = 0.0) -> dict:
     """Candidates (features), candidate x annotation-set targets, and annotation sets (with the baseline's stats)."""
     cands, pairs, sets = [], [], []
     n_cand = 0
     for stem, g in tqdm(index.groupby("stem"), desc=f"candidates {pred}"):
         prob = load_prob(pred, stem)
-        labels = label_components(prob, threshold, merge_px)
-        feats = candidate_features(labels, prob, threshold, merge_px, STEP, MIN_AREA)
+        labels = label_components(prob, threshold, merge_px, group_low)
+        feats = candidate_features(labels, prob, threshold, merge_px, STEP, MIN_AREA, group_low)
         ids = feats.index.to_numpy()
         base = to_instances(prob, baseline)
         miou_sum = np.zeros(len(ids))
@@ -186,7 +186,8 @@ def paired_bootstrap(new: pd.DataFrame, old: pd.DataFrame, n_boot: int = 2000, s
 # --------------------------------------------------------------------------- #
 # 2. Cross-fitting and 3. tuning
 # --------------------------------------------------------------------------- #
-def fit_scorer(cands: pd.DataFrame, threshold: float, merge_px: int, trained_on: str, seed: int = 0) -> dict:
+def fit_scorer(cands: pd.DataFrame, threshold: float, merge_px: int, trained_on: str, seed: int = 0,
+               group_low: float = 0.0) -> dict:
     """Fit the bagged regressor and bundle it with the candidate definition it is valid for.
 
     Squared loss -> the expected matched IoU. Each annotation set counts once
@@ -202,22 +203,24 @@ def fit_scorer(cands: pd.DataFrame, threshold: float, merge_px: int, trained_on:
         copies = pd.Series(rng.choice(stems, size=len(stems))).value_counts()
         weight = cands["n_sets"].to_numpy() * cands["stem"].map(copies).fillna(0).to_numpy()
         models.append(HistGradientBoostingRegressor(**GBM).fit(x, y, sample_weight=weight))
-    return dict(models=models, features=FEATURES, threshold=threshold, merge_px=merge_px, min_area=MIN_AREA,
-                step=STEP, trained_on=trained_on, sklearn=sklearn.__version__)
+    return dict(models=models, features=FEATURES, threshold=threshold, merge_px=merge_px, group_low=group_low,
+                min_area=MIN_AREA, step=STEP, trained_on=trained_on, sklearn=sklearn.__version__)
 
 
 def crossfit_scores(cands: pd.DataFrame, folds: list[int], directory, train: bool, threshold: float,
-                    merge_px: int, pred: str) -> np.ndarray:
+                    merge_px: int, pred: str, group_low: float = 0.0) -> np.ndarray:
     """Score fold k with the model trained without fold k (trained here, or loaded from ``directory``)."""
     score = np.zeros(len(cands))
     for k in folds:
         test = (cands["fold"] == k).to_numpy()
         path = directory / f"fold{k}.joblib"
         if train:
-            joblib.dump(fit_scorer(cands[~test], threshold, merge_px, f"{pred} without fold {k}"), path)
+            joblib.dump(fit_scorer(cands[~test], threshold, merge_px, f"{pred} without fold {k}",
+                                   group_low=group_low), path)
         bundle = joblib.load(path)
-        if (bundle["threshold"], bundle["merge_px"]) != (threshold, merge_px):
-            raise ValueError(f"{path} was trained for other candidates ({bundle['threshold']}, {bundle['merge_px']})")
+        trained_for = (bundle["threshold"], bundle["merge_px"], bundle.get("group_low", 0.0))
+        if trained_for != (threshold, merge_px, group_low):
+            raise ValueError(f"{path} was trained for other candidates {trained_for}")
         score[test] = score_candidates(bundle, cands[test])
     return score
 
@@ -241,16 +244,16 @@ def tune_min_score(table: dict, score: np.ndarray, objective: str):
     return float(best), dict(chosen=stats[best], nested=pd.concat(nested)), curve
 
 
-def scorer_dir(pred: str):
-    return PRED_DIR / pred / "instance_scorer"
+def scorer_dir(pred: str, suffix: str = ""):
+    return PRED_DIR / pred / f"instance_scorer{suffix}"
 
 
 def verify(pred: str, source: str, index: pd.DataFrame, polygons: dict, params: PostParams,
-           folds: list[int]) -> dict:
+           folds: list[int], suffix: str = "") -> dict:
     """End-to-end check: ``to_instances`` with each fold's model (trained on ``source``) on that fold's maps."""
     stats = []
     for k in folds:
-        p = PostParams(**{**params.as_dict(), "scorer": str(scorer_dir(source) / f"fold{k}.joblib")})
+        p = PostParams(**{**params.as_dict(), "scorer": str(scorer_dir(source, suffix) / f"fold{k}.joblib")})
         for stem, g in tqdm(index[index["fold"] == k].groupby("stem"), desc=f"verify fold {k}"):
             labels = to_instances(load_prob(pred, stem), p)
             for image_id in g["image_id"]:
@@ -265,6 +268,9 @@ def main() -> None:
                     help="run under preds/ whose post_params.json is the rule to compare with (default: --pred)")
     ap.add_argument("--threshold", type=float, default=None, help="candidate threshold (default: baseline's)")
     ap.add_argument("--merge-px", type=int, default=None, help="candidate merge radius (default: baseline's)")
+    ap.add_argument("--group-low", type=float, default=None,
+                    help="hysteresis grouping level of the candidates (default: baseline's; 0 = distance merging). "
+                         "Non-zero values write to instance_scorer_g<level>/ and post_params_learned_g<level>.json")
     ap.add_argument("--scorer-from", default=None,
                     help="reuse the fold models / final model trained on another run instead of training")
     ap.add_argument("--objective", default="pq", choices=["pq", "combo"], help="combo = (PQ + Dice) / 2")
@@ -277,6 +283,8 @@ def main() -> None:
     baseline = PostParams(**json.loads((PRED_DIR / baseline_run / "post_params.json").read_text())["params"])
     threshold = baseline.threshold if args.threshold is None else args.threshold
     merge_px = baseline.merge_px if args.merge_px is None else args.merge_px
+    group_low = baseline.group_low if args.group_low is None else args.group_low
+    suffix = f"_g{group_low:g}" if group_low > 0 else ""  # keeps the distance-merging results untouched
 
     index, polygons = load_annotations()
     if args.folds is not None:
@@ -286,10 +294,12 @@ def main() -> None:
     # 1. candidate table (cached: building it takes a few minutes)
     settings = dict(threshold=threshold, merge_px=merge_px, min_area=MIN_AREA, step=STEP,
                     baseline=baseline.as_dict(), folds=folds, features=FEATURES)
-    cache = PRED_DIR / args.pred / f"instance_candidates_t{threshold:g}_m{merge_px}.joblib"
+    if group_low > 0:
+        settings["group_low"] = group_low
+    cache = PRED_DIR / args.pred / f"instance_candidates_t{threshold:g}_m{merge_px}{suffix}.joblib"
     table = joblib.load(cache) if cache.exists() and not args.rebuild else None
     if table is None or table["settings"] != settings:
-        table = build_table(args.pred, index, polygons, threshold, merge_px, baseline)
+        table = build_table(args.pred, index, polygons, threshold, merge_px, baseline, group_low)
         table["settings"] = settings
         joblib.dump(table, cache)
     cands = table["cands"]
@@ -299,8 +309,9 @@ def main() -> None:
     # 2. cross-fitted scores (fold k scored by a model that never saw fold k)
     source = args.scorer_from or args.pred
     train = args.scorer_from is None
-    scorer_dir(source).mkdir(parents=True, exist_ok=True)
-    score = crossfit_scores(cands, folds, scorer_dir(source), train, threshold, merge_px, args.pred)
+    scorer_dir(source, suffix).mkdir(parents=True, exist_ok=True)
+    score = crossfit_scores(cands, folds, scorer_dir(source, suffix), train, threshold, merge_px, args.pred,
+                            group_low)
 
     # 3. tune min_score and compare with the current rule
     min_score, res, curve = tune_min_score(table, score, args.objective)
@@ -319,18 +330,18 @@ def main() -> None:
           f"paired bootstrap dPQ {boot['dpq']:+.4f} {boot['ci95']}, P(better) = {boot['p_better']:.3f}")
 
     # 4. final model (all folds) and parameters for inference
-    final = scorer_dir(source) / "all.joblib"
+    final = scorer_dir(source, suffix) / "all.joblib"
     if train:
-        joblib.dump(fit_scorer(cands, threshold, merge_px, f"{args.pred} (all folds)"), final)
+        joblib.dump(fit_scorer(cands, threshold, merge_px, f"{args.pred} (all folds)", group_low=group_low), final)
     params = PostParams(threshold=threshold, merge_px=merge_px, min_area=MIN_AREA,
-                        scorer=final.relative_to(ROOT).as_posix(), min_score=min_score)
+                        scorer=final.relative_to(ROOT).as_posix(), min_score=min_score, group_low=group_low)
     out = dict(params=params.as_dict(), objective=args.objective, **chosen, nested=nested,
                baseline=dict(run=baseline_run, **base), bootstrap_nested_vs_baseline=boot)
     if args.verify:
-        out["verify"] = verify(args.pred, source, index, polygons, params, folds)
+        out["verify"] = verify(args.pred, source, index, polygons, params, folds, suffix)
         print("end-to-end check:", out["verify"])
     if args.folds is None:  # only a full run defines the parameters to use
-        (PRED_DIR / args.pred / "post_params_learned.json").write_text(json.dumps(out, indent=2))
+        (PRED_DIR / args.pred / f"post_params_learned{suffix}.json").write_text(json.dumps(out, indent=2))
     print(json.dumps(out["params"], indent=2))
 
 

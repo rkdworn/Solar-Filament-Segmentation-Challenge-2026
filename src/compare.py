@@ -1,36 +1,63 @@
 """Compare out-of-fold (OOF) results of several configurations with uncertainty.
 
 For each configuration (preds/<name>/val holding OOF maps for all 707
-observations, with its tuned post_params.json):
+observations, with its tuned post_params.json, or ``<name>=<params .json>``
+to use another parameter file such as post_params_learned.json):
   * PQ and Dice on all observations, and per fold (mean +- std over 5 folds)
   * 95% bootstrap confidence interval of PQ (resampling observations)
   * paired bootstrap of the PQ difference against the first configuration
 
+A learned filter is evaluated cross-fitted: observations of fold k are
+filtered by the scorer trained without fold k (``fold<k>.joblib`` next to the
+saved ``all.joblib``), so its numbers are as honest as those of a fixed rule.
+
 Example:
     .venv\\Scripts\\python.exe src\\compare.py --preds r34_oof r34_2048_oof blend_oof
+    .venv\\Scripts\\python.exe src\\compare.py --preds r34_oof r34_oof=preds/r34_oof/post_params_learned.json
 """
 from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from common import FULL_SIZE, N_FOLDS, PRED_DIR, instance_masks, load_annotations
+from common import FULL_SIZE, N_FOLDS, PRED_DIR, ROOT, instance_masks, load_annotations
 from metrics import pq_stats, to_flat
 from postprocess import PostParams, to_instances, upsample_prob
 
 
-def per_observation(name: str, stems: list[str], sets: dict, gt: dict) -> np.ndarray:
+def load_config(spec: str) -> tuple[str, PostParams]:
+    """``name`` (uses preds/<name>/post_params.json) or ``name=<params .json>``."""
+    name, _, file = spec.partition("=")
+    path = Path(file) if file else PRED_DIR / name / "post_params.json"
+    path = path if path.is_absolute() else ROOT / path
+    return name, PostParams(**json.loads(path.read_text())["params"])
+
+
+def fold_params(params: PostParams, fold: int) -> PostParams:
+    """For a learned filter, the scorer trained without ``fold`` (cross-fitting); fixed rules unchanged."""
+    if not params.scorer:
+        return params
+    scorer = Path(params.scorer)
+    fold_file = (scorer if scorer.is_absolute() else ROOT / scorer).parent / f"fold{fold}.joblib"
+    if not fold_file.exists():
+        raise FileNotFoundError(f"cross-fitted scorer {fold_file} is missing")
+    return PostParams(**{**params.as_dict(), "scorer": str(fold_file)})
+
+
+def per_observation(spec: str, stems: list[str], sets: dict, gt: dict, fold_of: dict) -> np.ndarray:
     """Per observation: [IoU sum, TP, FP, FN, Dice sum, number of annotation sets]."""
-    params = PostParams(**json.loads((PRED_DIR / name / "post_params.json").read_text())["params"])
+    name, params = load_config(spec)
+    by_fold = {k: fold_params(params, k) for k in range(N_FOLDS)}
     out = np.zeros((len(stems), 6))
-    for j, stem in enumerate(tqdm(stems, desc=name)):
+    for j, stem in enumerate(tqdm(stems, desc=spec)):
         p8 = cv2.imread(str(PRED_DIR / name / "val" / f"{stem}.png"), cv2.IMREAD_GRAYSCALE)
-        labels = to_instances(upsample_prob(p8.astype(np.float32) / 255.0, FULL_SIZE), params)
+        labels = to_instances(upsample_prob(p8.astype(np.float32) / 255.0, FULL_SIZE), by_fold[fold_of[stem]])
         pred_fg = labels.ravel() > 0
         for image_id in sets[stem]:
             s = pq_stats(labels, gt[image_id])
@@ -62,7 +89,7 @@ def main() -> None:
     folds = np.array([fold_of[s] for s in stems])
     gt = {i: [to_flat(m) for m in instance_masks(polygons[i], FULL_SIZE)] for i in index["image_id"]}
 
-    stats = {n: per_observation(n, stems, sets, gt) for n in args.preds}
+    stats = {n: per_observation(n, stems, sets, gt, fold_of) for n in args.preds}
     rng = np.random.default_rng(0)
     boot_idx = rng.integers(0, len(stems), (args.boot, len(stems)))
     base = args.preds[0]

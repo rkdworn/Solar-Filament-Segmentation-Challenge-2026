@@ -7,7 +7,11 @@ pixels belong to the same filament:
 1. threshold the probability map,
 2. find connected components,
 3. merge components that are closer than ``merge_px`` pixels
-   (a filament broken by a faint gap is still one filament),
+   (a filament broken by a faint gap is still one filament);
+   with ``group_low`` > 0 (hysteresis grouping) components are merged when
+   they are connected through pixels with probability > ``group_low``,
+   gaps up to ``merge_px`` bridged, which follows the faint filament body
+   instead of joining any two fragments that happen to be close,
 4. drop instances that are too small or not confident enough
    (each false positive costs 0.5 in the PQ denominator).
 
@@ -44,6 +48,7 @@ class PostParams:
     min_meanp: float = 0.0   # drop instances whose mean probability is lower
     scorer: str = ""         # learned filter: saved instance scorer (path, absolute or relative to the repo)
     min_score: float = 0.0   # learned filter: drop instances whose predicted matched IoU is not higher
+    group_low: float = 0.0   # hysteresis grouping level (0 = off: plain distance merging)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -51,7 +56,7 @@ class PostParams:
 
 def to_instances(prob: np.ndarray, p: PostParams) -> np.ndarray:
     """prob: float32 HxW in [0, 1]. Returns an int32 label map (0 = background)."""
-    labels = label_components(prob, p.threshold, p.merge_px)
+    labels = label_components(prob, p.threshold, p.merge_px, p.group_low)
     if not labels.any():
         return labels
 
@@ -69,21 +74,35 @@ def to_instances(prob: np.ndarray, p: PostParams) -> np.ndarray:
     return remap[labels]
 
 
-def label_components(prob: np.ndarray, threshold: float, merge_px: int = 0) -> np.ndarray:
-    """Steps 1-3: components of ``prob > threshold`` (8-connected), fragments within ``merge_px`` merged.
+def label_components(prob: np.ndarray, threshold: float, merge_px: int = 0, group_low: float = 0.0) -> np.ndarray:
+    """Steps 1-3: components of ``prob > threshold`` (8-connected), fragments grouped. Labels are 1..K.
 
-    Dilating by r joins components whose gap is <= 2r; the merged instance
-    keeps only the original (undilated) pixels. Labels are 1..K.
+    Distance merging (``group_low`` = 0): dilating by r joins components whose
+    gap is <= 2r = ``merge_px``.
+    Hysteresis grouping (0 < ``group_low`` < ``threshold``): the grouping mask
+    is ``prob > group_low`` (dilated the same way when ``merge_px`` > 0), so two
+    fragments become one instance when a faint ridge of the filament links them.
+    In both cases an instance keeps only its ``prob > threshold`` pixels.
     """
     binary = (prob > threshold).astype(np.uint8)
     if not binary.any():
         return np.zeros(prob.shape, np.int32)
     n, labels = cv2.connectedComponents(binary, connectivity=8)
-    if merge_px > 0 and n > 2:
-        r = max(1, merge_px // 2)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
-        _, grouped = cv2.connectedComponents(cv2.dilate(binary, kernel), connectivity=8)
+    hysteresis = 0.0 < group_low < threshold
+    if n > 2 and (merge_px > 0 or hysteresis):
+        grouping = (prob > group_low).astype(np.uint8) if hysteresis else binary
+        if merge_px > 0:
+            r = max(1, merge_px // 2)
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+            grouping = cv2.dilate(grouping, kernel)
+        _, grouped = cv2.connectedComponents(grouping, connectivity=8)
         labels = np.where(binary > 0, grouped, 0).astype(np.int32)
+        if hysteresis:  # groups without a pixel above the threshold leave gaps: relabel 1..K
+            present = np.bincount(labels.ravel()) > 0
+            present[0] = False
+            remap = np.zeros(present.size, np.int32)
+            remap[present] = np.arange(1, int(present.sum()) + 1, dtype=np.int32)
+            labels = remap[labels]
     return labels
 
 
@@ -124,10 +143,10 @@ def load_scorer(path: str) -> dict:
 
 
 def candidate_features(labels: np.ndarray, prob: np.ndarray, threshold: float, merge_px: int, step: float,
-                       min_area: int):
+                       min_area: int, group_low: float = 0.0):
     """Descriptors of every candidate, including the maps one ``step`` below / above the threshold."""
-    lower = label_components(prob, threshold - step, merge_px)
-    upper = label_components(prob, threshold + step, merge_px)
+    lower = label_components(prob, threshold - step, merge_px, group_low)
+    upper = label_components(prob, threshold + step, merge_px, group_low)
     return instance_features(labels, prob, lower, upper, min_area)
 
 
@@ -140,10 +159,11 @@ def score_candidates(scorer: dict, feats) -> np.ndarray:
 def predict_matched_iou(labels: np.ndarray, prob: np.ndarray, p: PostParams) -> np.ndarray:
     """Predicted matched IoU per label (index 0 = background; -1 for labels too small to score)."""
     s = load_scorer(p.scorer)
-    if (p.threshold, p.merge_px) != (s["threshold"], s["merge_px"]):
-        raise ValueError(f"scorer {p.scorer} was trained for threshold={s['threshold']}, "
-                         f"merge_px={s['merge_px']}; got {p.threshold}, {p.merge_px}")
-    feats = candidate_features(labels, prob, p.threshold, p.merge_px, s["step"], s["min_area"])
+    trained_for = (s["threshold"], s["merge_px"], s.get("group_low", 0.0))
+    if (p.threshold, p.merge_px, p.group_low) != trained_for:
+        raise ValueError(f"scorer {p.scorer} was trained for (threshold, merge_px, group_low)={trained_for}; "
+                         f"got {(p.threshold, p.merge_px, p.group_low)}")
+    feats = candidate_features(labels, prob, p.threshold, p.merge_px, s["step"], s["min_area"], p.group_low)
     score = np.full(int(labels.max()) + 1, -1.0)
     if len(feats):
         score[feats.index.to_numpy()] = score_candidates(s, feats)
