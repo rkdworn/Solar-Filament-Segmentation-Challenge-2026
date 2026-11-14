@@ -106,7 +106,7 @@ def main() -> None:
     total = args.epochs * len(dl)
     warmup = len(dl)  # one epoch of linear warm-up, then cosine decay
     sched = torch.optim.lr_scheduler.LambdaLR(
-        opt, lambda s: (s + 1) / warmup if s < warmup else 0.5 * (1 + math.cos(math.pi * (s - warmup) / (total - warmup))))
+        opt, lambda s: (s + 1) / warmup if s < warmup else 0.5 * (1 + math.cos(math.pi * (s - warmup) / max(1, total - warmup))))
     dtype = amp_dtype()
     scaler = torch.amp.GradScaler("cuda", enabled=dtype == torch.float16)  # loss scaling only for fp16
     bce = torch.nn.BCEWithLogitsLoss()
