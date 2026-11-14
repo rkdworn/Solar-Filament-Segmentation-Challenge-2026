@@ -26,10 +26,12 @@ def main() -> None:
     ap.add_argument("--weights", type=float, nargs="+", default=None,
                     help="one weight per --preds folder (normalized to sum 1); default: equal weights")
     args = ap.parse_args()
-    weights = np.ones(len(args.preds)) if args.weights is None else np.asarray(args.weights, np.float64)
-    if weights.size != len(args.preds):
-        raise ValueError("--weights needs one value per --preds folder")
-    weights = weights / weights.sum()
+    weights = None
+    if args.weights is not None:
+        weights = np.asarray(args.weights, np.float64)
+        if weights.size != len(args.preds) or (weights <= 0).any():
+            raise ValueError("--weights needs one positive value per --preds folder")
+        weights = weights / weights.sum()
 
     dirs = [PRED_DIR / p / args.split for p in args.preds]
     stems = sorted(f.stem for f in dirs[0].glob("*.png"))
@@ -38,8 +40,11 @@ def main() -> None:
     for stem in tqdm(stems):
         maps = [cv2.imread(str(d / f"{stem}.png"), cv2.IMREAD_GRAYSCALE).astype(np.float32) / 255.0 for d in dirs]
         size = max(m.shape[0] for m in maps)
-        # weighted mean of the probabilities (equal weights = plain average)
-        avg = np.sum([w * upsample_prob(m, size) for w, m in zip(weights, maps)], axis=0)
+        maps = [upsample_prob(m, size) for m in maps]
+        if weights is None:  # plain average (kept exactly as before, so old blends rebuild byte for byte)
+            avg = np.mean(maps, axis=0)
+        else:  # weighted mean of the probabilities
+            avg = np.sum([w * m for w, m in zip(weights, maps)], axis=0)
         cv2.imwrite(str(out_dir / f"{stem}.png"), np.round(avg * 255).astype(np.uint8))
 
 

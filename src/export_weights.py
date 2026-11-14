@@ -10,6 +10,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 
@@ -28,6 +29,8 @@ def main() -> None:
                     help="parameter file in preds/<post>/, e.g. post_params_learned.json for the learned filter")
     ap.add_argument("--ckpt", default="best.pt")
     ap.add_argument("--submitted", default="final.csv", help="file name of the Kaggle submission under submissions/")
+    ap.add_argument("--tta", default="d4", choices=["none", "flip4", "d4"],
+                    help="test-time augmentation the submission was predicted with (read by the notebook)")
     args = ap.parse_args()
 
     WEIGHTS_DIR.mkdir(exist_ok=True)
@@ -45,8 +48,12 @@ def main() -> None:
     if params.get("scorer"):  # learned filter: ship the fitted instance scorer with the weights
         shutil.copy(ROOT / params["scorer"], WEIGHTS_DIR / "instance_scorer.joblib")
         params["scorer"] = "weights/instance_scorer.joblib"
-    manifest = dict(models=args.runs, post_processing=params, submitted_file=args.submitted,
+    manifest = dict(models=args.runs, tta=args.tta, post_processing=params, submitted_file=args.submitted,
                     validation={k: post[k] for k in ("dice", "pq_pooled", "pq_mean", "sq", "rq") if k in post})
+    submitted = ROOT / "submissions" / args.submitted
+    if submitted.exists():  # fingerprint of the submitted file (submissions/ itself is not in the repository)
+        manifest["submitted_sha256"] = hashlib.sha256(submitted.read_bytes()).hexdigest()
+        manifest["submitted_rows"] = sum(1 for _ in submitted.open()) - 1
     (WEIGHTS_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print("wrote", WEIGHTS_DIR / "manifest.json")
 
