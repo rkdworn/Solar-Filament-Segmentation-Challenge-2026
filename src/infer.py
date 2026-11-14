@@ -35,7 +35,7 @@ def split_stems(split: str, fold: int = 0) -> list[str]:
 
 
 def predict_maps(runs: list[str], stems: list[str], out_dir: Path, weights_root: Path = MODEL_DIR,
-                 ckpt: str = "best.pt", tta: bool = True) -> float:
+                 ckpt: str = "best.pt", tta: bool | str = True) -> float:
     """Write one averaged probability PNG per observation; returns seconds spent."""
     models = [load_trained(Path(weights_root) / r, ckpt) for r in runs]
     out_size = max(size for _, size in models)  # save at the finest resolution used
@@ -64,11 +64,11 @@ def main() -> None:
     ap.add_argument("--fold", type=int, default=0)
     ap.add_argument("--out", required=True)
     ap.add_argument("--ckpt", default="best.pt")
-    ap.add_argument("--no-tta", action="store_true")
+    ap.add_argument("--tta", default="flip4", choices=["none", "flip4", "d4"])
     ap.add_argument("--weights-root", default=str(MODEL_DIR), help="folder holding the run folders")
     args = ap.parse_args()
     predict_maps(args.runs, split_stems(args.split, args.fold), PRED_DIR / args.out / args.split,
-                 Path(args.weights_root), args.ckpt, tta=not args.no_tta)
+                 Path(args.weights_root), args.ckpt, tta=args.tta)
 
 
 if __name__ == "__main__":
