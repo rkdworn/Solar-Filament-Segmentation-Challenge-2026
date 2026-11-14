@@ -33,15 +33,21 @@ def _resize_image(src, dst_dir, size):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--size", type=int, default=WORK_SIZE)
-    size = ap.parse_args().size
+    ap.add_argument("--test-only", action="store_true", help="only resize test images (for inference)")
+    args = ap.parse_args()
+    size = args.size
 
     img_dir, mask_dir = img_cache_dir(size), mask_cache_dir(size)
     img_dir.mkdir(parents=True, exist_ok=True)
     mask_dir.mkdir(parents=True, exist_ok=True)
 
-    sources = sorted(TRAIN_IMG_DIR.glob("*.jpeg")) + sorted(TEST_IMG_DIR.glob("*.jpeg"))
+    sources = sorted(TEST_IMG_DIR.glob("*.jpeg"))
+    if not args.test_only:
+        sources = sorted(TRAIN_IMG_DIR.glob("*.jpeg")) + sources
     with ThreadPoolExecutor(8) as ex:
         list(tqdm(ex.map(lambda s: _resize_image(s, img_dir, size), sources), total=len(sources), desc="images"))
+    if args.test_only:
+        return
 
     index, polygons = load_annotations()
     for image_id in tqdm(index["image_id"], desc="masks"):

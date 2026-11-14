@@ -12,6 +12,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -32,6 +33,7 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--ckpt", default="best.pt")
     ap.add_argument("--no-tta", action="store_true")
+    ap.add_argument("--weights-root", default=str(MODEL_DIR), help="folder holding the run folders")
     args = ap.parse_args()
 
     if args.split == "val":
@@ -40,7 +42,7 @@ def main() -> None:
     else:
         stems = sorted(p.stem for p in TEST_IMG_DIR.glob("*.jpeg"))
 
-    models = [load_trained(MODEL_DIR / r, args.ckpt) for r in args.runs]
+    models = [load_trained(Path(args.weights_root) / r, args.ckpt) for r in args.runs]
     out_size = max(size for _, size in models)  # save at the finest resolution used
     out_dir = PRED_DIR / args.out / args.split
     out_dir.mkdir(parents=True, exist_ok=True)

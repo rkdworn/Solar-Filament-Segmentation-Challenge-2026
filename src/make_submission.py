@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -31,11 +32,15 @@ def encode(mask: np.ndarray) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pred", required=True, help="name under preds/ (uses preds/<name>/test)")
-    ap.add_argument("--params", required=True, help="name under preds/ holding post_params.json")
+    ap.add_argument("--params", required=True, help="name under preds/ holding post_params.json, or weights/manifest.json")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
-    params = PostParams(**json.loads((PRED_DIR / args.params / "post_params.json").read_text())["params"])
+    params_path = Path(args.params)
+    if params_path.suffix == ".json":  # weights/manifest.json from the repository
+        params = PostParams(**json.loads(params_path.read_text())["post_processing"])
+    else:  # name under preds/ holding post_params.json
+        params = PostParams(**json.loads((PRED_DIR / args.params / "post_params.json").read_text())["params"])
     print("post-processing:", params)
     stems = sorted(p.stem for p in TEST_IMG_DIR.glob("*.jpeg"))
 
