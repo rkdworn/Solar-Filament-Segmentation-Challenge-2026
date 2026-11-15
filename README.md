@@ -6,20 +6,21 @@ IEEE BigData Cup 2026). Metric: Panoptic Quality (PQ) and Dice.
 
 ## Method in one paragraph
 
-A U-Net with an ImageNet-pretrained encoder predicts a per-pixel filament
-probability from the single-channel image (normalized with on-disk statistics).
-Every annotation set is a training sample, so observations labeled by several
-experts contribute each expert's view (label-noise regularization). Instances
-are obtained by thresholding the probability map, taking 8-connected
-components, optionally merging nearby fragments, and discarding components
-that are unlikely to match an annotated filament. The discarding step is
-either a fixed rule (small or not confident components) or a gradient-boosted
-regressor that predicts each component's matched IoU from its probability,
-shape and stability descriptors; a component is kept when the prediction
-exceeds about PQ / 2, the break-even point of the PQ formula. All
-post-processing parameters (and the regressor) are fitted on out-of-fold
-predictions, scored exactly like the host's evaluator (pooled PQ over
-annotator-image pairs, IoU > 0.5 matching, 2048 px).
+A U-Net with an ImageNet-pretrained EfficientNetV2-S encoder predicts a
+per-pixel filament probability from the single-channel image (downscaled to
+1024 px and normalized with on-disk statistics). It is trained on soft labels:
+the per-pixel mean of the masks drawn by the image's annotators. The final
+submission averages ten models (5 folds × 2 training seeds) over the eight
+rotations and reflections of each test image. Instances are obtained by
+thresholding the probability map at 0.5, taking 8-connected fragments,
+grouping fragments that are connected through pixels with probability above 0.2
+(hysteresis grouping, gaps up to 8 px bridged), and discarding candidates that
+are unlikely to match an annotated filament: a gradient-boosted regressor
+predicts each candidate's matched IoU from its probability, shape and stability
+descriptors, and a candidate is kept when the prediction exceeds about PQ / 2,
+the break-even point of the PQ formula. All post-processing parameters (and the
+regressor) are fitted on out-of-fold predictions, scored exactly like the host's
+evaluator (pooled PQ over annotator-image pairs, IoU > 0.5 matching, 2048 px).
 
 ## Repository layout
 
@@ -73,9 +74,36 @@ handful of masks.
 **From scratch** (caches, then training):
 
 ```bash
-python src/prepare.py                     # 1024 px cache
-python src/prepare.py --size 2048         # native-resolution cache
-# (training / inference commands of the final submission are listed below)
+python src/prepare.py                     # 1024 px cache (images, masks, soft targets)
+```
+
+The final submission, step by step (bash; fold models take about 30 min each on an RTX 5060):
+
+```bash
+# 1. two 5-fold runs of the same model (seed 42 locally, seed 43 was run on Kaggle T4 GPUs with --bs 8)
+for k in 0 1 2 3 4; do
+  python src/train.py --name effv2ssoft_f$k --encoder tu-tf_efficientnetv2_s --fold $k \
+      --soft --ema --epochs 65 --bs 4 --crop 768 --lr 3e-4 --val-every 5
+  python src/train.py --name effv2ssoftk43_f$k --encoder tu-tf_efficientnetv2_s --fold $k \
+      --soft --ema --epochs 65 --bs 8 --crop 768 --lr 3e-4 --val-every 5 --seed 43
+done
+# 2. out-of-fold maps with D4 test-time augmentation, then the two seeds averaged
+for k in 0 1 2 3 4; do
+  python src/infer.py --runs effv2ssoft_f$k --split val --fold $k --out effv2ssoftd4_f$k --tta d4
+  python src/infer.py --runs effv2ssoftk43_f$k --split val --fold $k --out effv2ssoftk43d4_f$k --tta d4
+done
+python src/collect_oof.py --prefix effv2ssoftd4
+python src/collect_oof.py --prefix effv2ssoftk43d4
+python src/blend.py --preds effv2ssoftd4_oof effv2ssoftk43d4_oof --split val --out pairk43_oof
+# 3. post-processing fitted on the out-of-fold maps: fixed rule (reference), then the learned filter
+#    on hysteresis-grouped candidates (threshold 0.5, group_low 0.2, merge_px 8)
+python src/tune.py --pred effv2ssoftd4_oof --fold -1
+python src/instance_scorer.py --pred pairk43_oof --baseline effv2ssoftd4_oof \
+    --threshold 0.5 --merge-px 8 --group-low 0.2   # -> preds/pairk43_oof/post_params_learned_g0.2.json
+# 4. store the weights and parameters; the notebook then writes the submission from them
+python src/export_weights.py --runs effv2ssoft_f0 effv2ssoft_f1 effv2ssoft_f2 effv2ssoft_f3 effv2ssoft_f4 \
+    effv2ssoftk43_f0 effv2ssoftk43_f1 effv2ssoftk43_f2 effv2ssoftk43_f3 effv2ssoftk43_f4 \
+    --post pairk43_oof --post-file post_params_learned_g0.2.json --submitted final_B_v1.csv --tta d4
 ```
 
 Training options (`python src/train.py --help`):
@@ -104,7 +132,24 @@ run's maps (e.g. a single model's filter to an ensemble) and only re-tunes its t
 
 ## Results
 
-_To be filled in._
+Out-of-fold over the 707 training images (5-fold CV grouped by image; the learned
+filter is cross-fitted, i.e. fold k is filtered by a model trained without fold k).
+95% intervals come from 2,000 bootstrap resamples of images; ΔPQ is relative to the
+row above (paired bootstrap).
+
+| Configuration | PQ [95% CI] | Dice | ΔPQ [95% CI] | Public LB |
+|---|---|---|---|---|
+| ResNet34, one sample per annotator, flip TTA, fixed rule | 0.421 [0.412, 0.430] | 0.673 | | 0.36 (fold 0 only) |
+| EfficientNetV2-S encoder | 0.430 [0.420, 0.439] | 0.682 | +0.008 [+0.004, +0.013] | |
+| + D4 test-time augmentation | 0.433 [0.424, 0.442] | 0.680 | +0.004 [+0.001, +0.006] | |
+| + soft labels, EMA, 65 epochs | 0.440 [0.431, 0.449] | 0.678 | +0.007 [+0.003, +0.011] | |
+| + learned instance filter | 0.445 [0.436, 0.454] | 0.675 | +0.004 [+0.002, +0.007] | 0.39 |
+| + hysteresis grouping (`manifest_A.json`, 5 models) | 0.448 [0.438, 0.457] | 0.672 | +0.003 [+0.001, +0.005] | 0.39 |
+| + second seed (**final**, `manifest.json`, 10 models) | **0.449 [0.440, 0.458]** | 0.672 | +0.001 [−0.001, +0.004] | 0.39 |
+
+For reference, two annotators of the same image agree at PQ 0.34 (Dice 0.61).
+Inference for the 180 test images takes about 8 minutes on an RTX 5060
+(10 models × 8 views, then post-processing).
 
 ## License
 
