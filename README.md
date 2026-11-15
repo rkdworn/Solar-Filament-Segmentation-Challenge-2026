@@ -39,7 +39,7 @@ annotator-image pairs, IoU > 0.5 matching, 2048 px).
 | `src/make_submission.py` | writes the submission CSV (compressed COCO RLE) |
 | `src/annotator_agreement.py` | expert-vs-expert agreement (human reference) |
 | `src/export_weights.py` | copies trained runs to `weights/` (fp16) and writes `weights/manifest.json` |
-| `weights/` | stored fold models (`<run>/best.pt`, `<run>/config.json`), learned filter (`instance_scorer.joblib`) and `manifest.json` (model list, test-time augmentation, post-processing, validation scores, fingerprint of the submitted file) |
+| `weights/` | stored fold models (`<run>/best.pt`, `<run>/config.json`), learned filters (`instance_scorer*.joblib`) and manifests (`manifest.json` = final submission, `manifest_A.json` = single-seed variant: model list, test-time augmentation, post-processing, validation scores, fingerprint of the submitted file) |
 | `notebooks/pipeline.ipynb` | the whole pipeline step by step (data, preprocessing, model, inference, post-processing, validation), then the full reproduction of the submission from `weights/` |
 
 ## Reproduce
@@ -62,9 +62,9 @@ section 8 regenerates the submission (`submissions/reproduced.csv`) from `weight
 jupyter nbconvert --to notebook --execute notebooks/pipeline.ipynb --output pipeline_executed.ipynb
 ```
 
-`weights/manifest.json` is the final configuration (5 models). Our second selected Kaggle
-submission adds the same model trained with a second seed (10 models, `weights/manifest_B.json`);
-reproduce it by setting the environment variable `FIL_MANIFEST=manifest_B.json` before running the
+`weights/manifest.json` is our final Kaggle submission: the 5-fold model trained with two seeds
+(10 models). `weights/manifest_A.json` is the single-seed variant (5 models, also submitted);
+run it by setting the environment variable `FIL_MANIFEST=manifest_A.json` before starting the
 notebook. Both submitted files were written by this notebook from these weights, and each manifest
 stores the SHA-256 of its file, which section 8 compares with. GPU kernels (and bf16 vs fp16 on
 older GPUs) can round a few borderline pixels differently, so a re-run elsewhere may differ in a
