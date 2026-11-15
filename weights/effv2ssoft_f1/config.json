@@ -1,0 +1,20 @@
+{
+  "name": "effv2ssoft_f1",
+  "arch": "Unet",
+  "encoder": "tu-tf_efficientnetv2_s",
+  "fold": 1,
+  "epochs": 65,
+  "bs": 4,
+  "size": 1024,
+  "crop": 768,
+  "val_every": 5,
+  "lr": 0.0003,
+  "workers": 6,
+  "seed": 42,
+  "spine": false,
+  "spine_weight": 0.5,
+  "soft": true,
+  "ema": true,
+  "ema_decay": 0.998,
+  "select": "combo"
+}

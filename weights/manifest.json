@@ -1,0 +1,27 @@
+{
+  "models": [
+    "effv2ssoft_f0",
+    "effv2ssoft_f1",
+    "effv2ssoft_f2",
+    "effv2ssoft_f3",
+    "effv2ssoft_f4"
+  ],
+  "tta": "d4",
+  "post_processing": {
+    "threshold": 0.5,
+    "merge_px": 8,
+    "min_area": 50,
+    "min_conf": 0.0,
+    "min_meanp": 0.0,
+    "scorer": "weights/instance_scorer.joblib",
+    "min_score": 0.2,
+    "group_low": 0.2
+  },
+  "submitted_file": "final_A_v1.csv",
+  "validation": {
+    "dice": 0.6718895158102052,
+    "pq_pooled": 0.44765003119588576
+  },
+  "submitted_sha256": "fe4a91871d675ecb6656723b7a306374a5be9f5234ba7a969cb8e84041f75aab",
+  "submitted_rows": 1141
+}

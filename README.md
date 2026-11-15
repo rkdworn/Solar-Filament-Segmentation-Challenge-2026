@@ -38,6 +38,9 @@ annotator-image pairs, IoU > 0.5 matching, 2048 px).
 | `src/tune.py` | grid search of post-processing on out-of-fold predictions |
 | `src/make_submission.py` | writes the submission CSV (compressed COCO RLE) |
 | `src/annotator_agreement.py` | expert-vs-expert agreement (human reference) |
+| `src/export_weights.py` | copies trained runs to `weights/` (fp16) and writes `weights/manifest.json` |
+| `weights/` | stored fold models (`<run>/best.pt`, `<run>/config.json`), learned filter (`instance_scorer.joblib`) and `manifest.json` (model list, test-time augmentation, post-processing, validation scores, fingerprint of the submitted file) |
+| `notebooks/pipeline.ipynb` | the whole pipeline step by step (data, preprocessing, model, inference, post-processing, validation), then the full reproduction of the submission from `weights/` |
 
 ## Reproduce
 
@@ -48,7 +51,26 @@ pip install torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytor
 pip install -r requirements.txt
 ```
 
-Place the competition data at `data/MAGFiLO_1.0_Kaggle_2026/` (as unzipped from Kaggle), then:
+Place the competition data at `data/MAGFiLO_1.0_Kaggle_2026/` (as unzipped from Kaggle).
+
+**From the stored weights (no training):** open `notebooks/pipeline.ipynb` and run all cells.
+Sections 1–7 illustrate every step on one image and also run on a CPU (about a minute);
+section 8 regenerates the submission (`submissions/reproduced.csv`) from `weights/` and the
+180 test images and runs only when a CUDA GPU is available. Headless:
+
+```bash
+jupyter nbconvert --to notebook --execute notebooks/pipeline.ipynb --output pipeline_executed.ipynb
+```
+
+`weights/manifest.json` is the final configuration (5 models). Our second selected Kaggle
+submission adds the same model trained with a second seed (10 models, `weights/manifest_B.json`);
+reproduce it by setting the environment variable `FIL_MANIFEST=manifest_B.json` before running the
+notebook. Both submitted files were written by this notebook from these weights, and each manifest
+stores the SHA-256 of its file, which section 8 compares with. GPU kernels (and bf16 vs fp16 on
+older GPUs) can round a few borderline pixels differently, so a re-run elsewhere may differ in a
+handful of masks.
+
+**From scratch** (caches, then training):
 
 ```bash
 python src/prepare.py                     # 1024 px cache
